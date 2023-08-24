@@ -10,32 +10,40 @@ This file takes an XYZ file and prepares it for use with Carbon Nanoverse.
 Despite being designed for carbon, this will work for any atom type. 
 
 Usage:
-    python3 inputToCarbonNanoverse.py (Input File Name) (Max Chunk Size) (Clean Data)
+    python3 inputToCarbonNanoverse.py Input-file-name optional-args
+    
+args:
+    --C       - Clean data. If not specified set to false
+    --MC x    - Set a chunk size of x. If not specified 10 is used
 
-Where the input file name, max chunk size and clean data are optional. 
-If none are specified, the defaults will be used
 
 Command line args:
-    Input file name - The file to be processed. Must be an XYZ.
-    Max chunk size  - The max chunk size allowed by the program
+    Input file name - The file to be processed. Must be an XYZ of format
+                      specified on github:
+                          https://github.com/Woodzy90001/Carbon-Nanoverse
+                          
+    Max chunk size  - The max chunk size allowed by the program.
+    
     Clean data      - A flag to remove any bonds which are unrealistically 
                       long and any atoms with less than 2 connections for 
-                      Carbon, and no connections for any other atom type
-
-The XYZ file must have the number of connections for each atom. 
-
+                      Carbon, and no connections for any other atom type.
 '''
 
 
-        
-def CoordsToChunkCoords(coords, chunkSize):###########################
+# Normal coorinates to chunk coorinates
+def CoordsToChunkCoords(coords, chunkSize):
     return (coords / chunkSize).astype(int) # Casting to int rounds down
-    
+
 def ChunkCordsToIndex(chunkCoords, numChunks):
     return (chunkCoords[0] + 
             chunkCoords[1]*numChunks + 
             chunkCoords[2]*(numChunks**2))
 
+def ParseBoxDimensions(splitData):
+    return np.array([float(splitData[0]), float(splitData[2]),
+                     float(splitData[1])])
+
+# Find equivelant chunk within original box
 def CentreChunkPoints(coords, chunkNum):
     for i in range(len(coords)):
         if (coords[i] >= chunkNum): coords[i] = chunkNum-1
@@ -50,6 +58,7 @@ def SplitLine(line):
     splitData = list(filter(None, splitData))
     return splitData
 
+# Find chunk coord for position
 def ChunkifyPoints(chunkNum, boxDimensions, points):
     infoArray = np.zeros((chunkNum, chunkNum, chunkNum))
     chunkSize = boxDimensions / chunkNum
@@ -67,7 +76,8 @@ def ChunkifyPoints(chunkNum, boxDimensions, points):
 
 
 
-
+# Take an input file smaller than the max chunk size and copy the contents
+# until it is larger than the max chunk size
 def RepeatInputFile(inputFile, maxChunkSize):
     
     f = open(inputFile, 'r')
@@ -106,24 +116,27 @@ def RepeatInputFile(inputFile, maxChunkSize):
                 
         # Save bounding box size
         elif (len(splitData) == 3):
-            boxDimensions = float(splitData[0]) # Assuming all side lengths are 
-                                                # equal
+            boxDimensions = ParseBoxDimensions(splitData)
 
+    # Centre at 0
     minValues = np.amin(inputFileAtoms, axis=0)[:3]
     for i in range(len(inputFileAtoms)):
         inputFileAtoms[i][:3] -= minValues
-            
-    repeatTimes = int(-(-maxChunkSize // boxDimensions)) # Round up without math import
+        
+    # Duplicate atoms to build box
+    repeatTimes = [int(-(-maxChunkSize // chunkSize)) for chunkSize in boxDimensions]
+    repeatTimes = np.asarray(repeatTimes)
     atomTypesRepeated = []
     atomsRepeated = []
+    finalBoxSize = repeatTimes*boxDimensions
     for i in range(len(inputFileAtoms)):
-        for xOffset in range(repeatTimes):
-            for yOffset in range(repeatTimes):
-                for zOffset in range(repeatTimes):
+        for xOffset in range(repeatTimes[0]):
+            for yOffset in range(repeatTimes[1]):
+                for zOffset in range(repeatTimes[2]):
                     newAtom = np.copy(inputFileAtoms[i])
                     newAtom[:3] += np.array([xOffset, yOffset, zOffset]) * boxDimensions
                     
-                    if not (max(newAtom[:3]) >= repeatTimes*boxDimensions):
+                    if not np.any(np.greater_equal(newAtom[:3], finalBoxSize)):
                         atomsRepeated.append(newAtom)
                         atomTypesRepeated.append(inputFileAtomTypes[i])
     
@@ -142,9 +155,9 @@ def RepeatInputFile(inputFile, maxChunkSize):
         atomTypesRepeated.append(point[-1])
         atomsRepeated.append(np.array([float(point[0]), float(point[1]), float(point[2]), int(float(point[3]))]))
     
-    newFileName = "{}_repeated_C_{}.xyz".format(inputFile[:-4], str(repeatTimes*boxDimensions).replace(".", "-"))
+    newFileName = "{}_repeated_C_{}.xyz".format(inputFile[:-4], str(min(finalBoxSize)).replace(".", "-"))
     f = open(newFileName, 'w')
-    f.write("{}\n{} {} {}\n".format(len(atomsRepeated), repeatTimes*boxDimensions, repeatTimes*boxDimensions, repeatTimes*boxDimensions))
+    f.write("{}\n{} {} {}\n".format(len(atomsRepeated), finalBoxSize[0], finalBoxSize[1], finalBoxSize[2]))
     for i in range(len(atomsRepeated)):
         f.write("{} {} {} {} {}\n".format(atomTypesRepeated[i], atomsRepeated[i][0],
                                         atomsRepeated[i][1], atomsRepeated[i][2], 
@@ -156,11 +169,12 @@ def RepeatInputFile(inputFile, maxChunkSize):
     del(inputFileAtomTypes)
     del(atomTypesRepeated)
     del(atomsRepeated)
+    del(finalBoxSize)
     
     return newFileName
 
 
-
+# Finnd max chunk size which ensures less than 1000 points in it
 def FindOptimalChunks(points, boxDimensions, sliceVal = 20, cutoff = 0.4, debugInfo=False):
 
     if debugInfo:
@@ -171,9 +185,7 @@ def FindOptimalChunks(points, boxDimensions, sliceVal = 20, cutoff = 0.4, debugI
     
     capacityArrays = []
     maxFound = False
-    while not maxFound:
-    
-        
+    while not maxFound: 
         infoArray = ChunkifyPoints(chunkNum, boxDimensions, points)
         
         if (max(infoArray) < 1000):
@@ -181,20 +193,13 @@ def FindOptimalChunks(points, boxDimensions, sliceVal = 20, cutoff = 0.4, debugI
             
         capacityArrays.append(infoArray)
         chunkNum += 1
-        
-    capacityArrays.append(ChunkifyPoints(chunkNum, boxDimensions, points))
     
     if debugInfo:
         print("Optimal chunks found. Chunk num - {}\nTime taken - {}".format(chunkNum-1, time.time() - startChunkFind))
     
-    maxAtoms = max(capacityArrays[chunkNum-2])
-    minAtoms = min(capacityArrays[chunkNum-2])
-    meanAtoms = np.mean(capacityArrays[chunkNum-2])
-    stdAtoms = np.std(capacityArrays[chunkNum-2])
-    
     numChunks = chunkNum - 1
     
-    return maxAtoms, minAtoms, meanAtoms, stdAtoms, numChunks
+    return numChunks
 
 def GetDistance(atom1, atom2):
     return np.linalg.norm(atom1-atom2)
@@ -210,22 +215,20 @@ def FindCosestAtomLocation(referenceAtom, testAtom, boxDimensions):
             testAtomUpdated = testAtom
             
             for testIndex in range(3):
-                testAtomUpdated[testIndex] += boxDimensions
+                testAtomUpdated[testIndex] += boxDimensions[testIndex]
                 if (GetDistance(referenceAtom, testAtomUpdated) < bondDistance):
                     bondDistance = GetDistance(referenceAtom, testAtomUpdated)
                 else:
-                    testAtomUpdated[testIndex] -= boxDimensions*2
+                    testAtomUpdated[testIndex] -= boxDimensions[testIndex]*2
                     if (GetDistance(referenceAtom, testAtomUpdated) < bondDistance):
                         bondDistance = GetDistance(referenceAtom, testAtomUpdated)
                     else:
-                        testAtomUpdated[testIndex] += boxDimensions
+                        testAtomUpdated[testIndex] += boxDimensions[testIndex]
                     
             testAtom = testAtomUpdated
             
-        #if (bondDistance > 3):
-        #    print(bondDistance)
-            
         return testAtom
+
 
 # If the centrepoint of the bond is outside the bounding box then move the
 # bond into the box
@@ -239,7 +242,7 @@ def CentreMidpoint(atom1, atom2, boxDimensions):
                 testAtom2 = atom2 + offsetVect
                 
                 midpoint = GetMidpoint(testAtom1, testAtom2)
-                if (min(midpoint) >= 0) and (max(midpoint) <= boxDimensions):
+                if (min(midpoint) >= 0) and not np.any(np.greater(midpoint, boxDimensions)):
                     break
             else: # I hate how this looks but it works
                 continue
@@ -249,7 +252,7 @@ def CentreMidpoint(atom1, atom2, boxDimensions):
         break
     
     return testAtom1, testAtom2
-    
+
 class Bond:
     
     def __init__(self, atom1Coords, atom2Coords, atom1ID, atom2ID):
@@ -277,9 +280,9 @@ class Bond:
         
     def Centre(self, boxDimensions):
         self.atom2Coords = FindCosestAtomLocation(self.atom1Coords, self.atom2Coords, boxDimensions)
-        
+
         midpoint = self.GetMidpoint()
-        if (min(midpoint) < 0) or (max(midpoint) > boxDimensions):
+        if (min(midpoint) < 0) or np.any(np.greater(midpoint, boxDimensions)):
             self.atom1Coords, self.atom2Coords = CentreMidpoint(
                 self.atom1Coords, self.atom2Coords, boxDimensions)
         
@@ -289,51 +292,61 @@ class Bond:
 
 
 
-
 '''
-Set a desired chunk size, the program will make the chunk size as close to
-this as possible. 
-
-Reccomended ~ 10
+Usage:
+    python3 inputToCarbonNanoverse.py Input-file-name optional-args
+    
+args:
+    --C       - Clean data. If not specified set to false
+    --M x    - Set a chunk size of x. If not specified 10 is used
 '''
-
 maxChunkSize = 10
 cleanData = False
-#inputFile = "screw.xyz"
-inputFile = "1_5.xyz"
-#inputFile = "0_5.xyz"
-inputFile = "diamondUnitCell.xyz"
-inputFile = "cleanedLiC.xyz"
+debug = False
 
 # Process command arguments
+
+if ((len(sys.argv)) == 1) or (sys.argv[1][-4:] != ".xyz"):
+    print("Please provide an XYZ filename. \n\nUsage:\n\tpython3 inputToCarbonNanoverse.py Input-file-name optional-args\n\nargs:\n\t--C       - Clean data. If not specified set to false\n\t--MC x    - Set a chunk size of x. If not specified 10 is used")
+    sys.exit()
 if (len(sys.argv)) > 1:
     inputFile = sys.argv[1]
 if (len(sys.argv)) > 2:
-    maxChunkSize = int(sys.argv[2])
-if (len(sys.argv)) == 4:
-    if (sys.argv[3].lower() == "true") or (sys.argv[3].lower() == "t") or (sys.argv[3].lower() == "y"):
-        cleanData = True
-    elif (sys.argv[3].lower() == "false") or (sys.argv[3].lower() == "f") or (sys.argv[3].lower() == "n"):
-        cleanData = False
+    for i in range(2, len(sys.argv)):
+        if (sys.argv[i] == "--C"): cleanData = True
+        if (sys.argv[i] == "--M") and (i < (len(sys.argv) - 1)): 
+            try:
+                maxChunkSize = float(sys.argv[i + 1])
+            except:
+                print("Error, max chunk size can't be parsed into a float. \n\nUsing 10 instead. ")
 
-
-
+# Formatting output file name
 cleanDataString = "N"
 if cleanData: cleanDataString = "Y"
-fileName = "{}_{}{}.cnv".format(inputFile[:-4], maxChunkSize, cleanDataString)
-print("Reading file ...")
+fileName = "{}_{}{}.cnv".format(inputFile[:-4], str(maxChunkSize).replace(".", "-"), cleanDataString)
 
 '''
 
 ~~~~~~~~~~~~~~~~~~~~~~~ File reading ~~~~~~~~~~~~~~~~~~~~~~~
 
 '''
+
+print("Reading file ...")
 globalStart = time.time()
 fileReadStart = time.time()
 
-file = open(inputFile, "r")
-data = file.readlines()
-file.close() 
+
+
+
+
+try:
+    file = open(inputFile, "r")
+    data = file.readlines()
+    file.close()
+except FileNotFoundError:
+    print("Error, No such file or directory: {}".format(inputFile))
+    sys.exit()
+    
 
 # Verify file is large enough
 boxSizeFound = False
@@ -344,19 +357,23 @@ while (not boxSizeFound and (currLine < totalLineCount)):
     splitData = SplitLine(line)
 
     if (len(splitData) == 3):
-        boxDimensions = float(splitData[0]) # Assuming all side lengths are 
-                                            # equal
+        boxDimensions = ParseBoxDimensions(splitData)
         boxSizeFound = True
     currLine += 1
 
-if (boxDimensions < maxChunkSize): 
+if (min(boxDimensions) < maxChunkSize): 
     del(data)
     
     inputFile = RepeatInputFile(inputFile, maxChunkSize)
-    file = open(inputFile, "r")
-    data = file.readlines()
-    file.close() 
+    try:
+        file = open(inputFile, "r")
+        data = file.readlines()
+        file.close() 
+    except FileNotFoundError:
+        print("Error, No such file or directory: {}".format(inputFile))
+        sys.exit()
 
+del(boxDimensions)
 validElements = ['h', 'he', 'li', 'be', 'b', 'c', 'n', 'o', 'f', 'ne', 'na', 'mg', 'al', 'si', 'p', 's', 'cl', 'ar', 'k', 'ca', 'sc', 'ti', 'v', 'cr', 'mn', 'fe', 'co', 'ni', 'cu', 'zn', 'ga', 'ge', 'as', 'se', 'br', 'kr', 'rb', 'sr', 'y', 'zr', 'nb', 'mo', 'tc', 'ru', 'rh', 'pd', 'ag', 'cd', 'in', 'sn', 'sb', 'te', 'i', 'xe', 'cs', 'ba', 'la', 'ce', 'pr', 'nd', 'pm', 'sm', 'eu', 'gd', 'tb', 'dy', 'ho', 'er', 'tm', 'yb', 'lu', 'hf', 'ta', 'w', 're', 'os', 'ir', 'pt', 'au', 'hg', 'tl', 'pb', 'bi', 'po', 'at', 'rn', 'fr', 'ra', 'ac', 'th', 'pa', 'u', 'np', 'pu', 'am', 'cm', 'bk', 'cf', 'es', 'fm', 'md', 'no', 'lr', 'rf', 'db', 'sg', 'bh', 'hs', 'mt', 'ds', 'rg', 'cn', 'nh', 'fl', 'mc', 'lv', 'ts', 'og']
 atomTypes = []
 
@@ -364,10 +381,6 @@ atoms = []
 atomType = []
 connections = []
 lineCount = 0
-
-minX = 100
-minY = 100
-minZ = 100
 
 '''
 [x, y, z]
@@ -415,16 +428,6 @@ for line in data:
                 connections.pop()
             else:
                 atomType.append(atomTypeStr)
-                
-                
-
-            # Save the min XYZ values to bring the box to 0
-            if (float(splitData[1]) < minX):
-                minX = float(splitData[1])
-            if (float(splitData[3]) < minY):
-                minY = float(splitData[3])
-            if (float(splitData[2]) < minZ):
-                minZ = float(splitData[2])
             
             
             
@@ -459,42 +462,23 @@ for line in data:
         
     # Save bounding box size
     elif (len(splitData) == 3):
-        boxDimensions = float(splitData[0]) # Assuming all side lengths are 
-                                            # equal
-
-print(atomTypes)
+        boxDimensions = ParseBoxDimensions(splitData)
 
 # Zero all atoms
-offsetArray = np.array([minX*-1, minY*-1, minZ*-1])
-
-zeroedAtoms = []
-for currAtom in atoms:
-    zeroedAtoms.append(np.add(currAtom, offsetArray))
-
-
-atoms = zeroedAtoms
-
-mins = [100,100,100]
-maxs = [0,0,0]
-
-
-# Verify data is within the specified chunk size.
-for currAtom in atoms:
-    if currAtom[0] > maxs[0]: maxs[0] = currAtom[0]
-    if currAtom[0] < mins[0]: mins[0] = currAtom[0]
-    if currAtom[1] > maxs[1]: maxs[1] = currAtom[1]
-    if currAtom[1] < mins[1]: mins[1] = currAtom[1]
-    if currAtom[2] > maxs[2]: maxs[2] = currAtom[2]
-    if currAtom[2] < mins[2]: mins[2] = currAtom[2]
-
-if (((maxs[0] - mins[0]) > boxDimensions) or ((maxs[1] - mins[1]) > boxDimensions) or ((maxs[2] - mins[2]) > boxDimensions)):
+minValues = np.amin(atoms, axis=0)
+for i in range(len(atoms)):
+    atoms[i] -= minValues
+    
+    
+# Verify all points are within the bounds
+mins = np.amin(atoms, axis=0)
+maxs = np.amax(atoms, axis=0)
+if (np.any(np.greater(maxs, boxDimensions))) or (np.any(np.less(mins, np.zeros(3)))):
     print("Error: Actual box dimensions are larger than expected dimensions. \n       Please fix input file.\n\nExpected dimension - {}\n\nActual dimensions : \n  x - {}\n  y - {}\n  z - {}".format(boxDimensions, maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]))
     sys.exit()
 
-    
-maxChunkSizeChunkNum = (np.ceil((boxDimensions / maxChunkSize))).astype(int)
 
-
+maxChunkSizeChunkNum = max((np.ceil((boxDimensions / maxChunkSize))).astype(int))
 print("File read done, time taken             - {}\n".format(time.time() - fileReadStart))
 
 
@@ -510,7 +494,8 @@ print("File read done, time taken             - {}\n".format(time.time() - fileR
 '''
 Write start of outfile
 '''
-
+print("Creating output file ...")
+fileCreateStart = time.time()
 outText = ""
 try:
     f = open(fileName, "w")
@@ -528,7 +513,7 @@ except Exception as e:
     print("Error writing file")
     print(e)
     sys.exit()
-
+print("Output file created, time taken        - {}\n".format(time.time() - fileCreateStart))
 
 
 
@@ -553,7 +538,7 @@ bondDict = {}
 print("Finding bonds ...")
 
 bondStart = time.time()
-tree = KDTree(atoms, boxsize=np.array([boxDimensions, boxDimensions, boxDimensions]))
+tree = KDTree(atoms, boxsize=boxDimensions)
 distsRet, indexRet = tree.query(atoms, k=max(connections) + 1)
 
 print("Bonds found, saving bonds ...")
@@ -599,9 +584,8 @@ for atom in atoms:
         
         
         
-        
-print("Bond average")
-print(bondSum/bondCount)    
+
+if debug:  print("Bond length average - {}".format(bondSum/bondCount))
 print("Bonds found, time taken                - {}\n".format(time.time() - 
                                                            bondStart))
 
@@ -626,61 +610,59 @@ print("Bonds found, time taken                - {}\n".format(time.time() -
 
 
 
+print("Cleaning atoms and finding chunk sizes ...")
+atomClean = time.time()
 # Calculate the chunk to ensure the maximum atom per chunk without exceding 
 # 1000
 
-atomTypesAtomHolder = []
-atomsIndexReference = {} # This is not a great way to do it but it'll work
-                             # for now
+atomsHolder = {} 
 
-count = 0
 for at in atomTypes:
-    atomTypesAtomHolder.append([at])
-    atomsIndexReference[at] = count    
-    count += 1
+    atomsHolder[at] = []    
 
 for i in range(len(atoms)):
     if ("C_" in atomType[i]):
         if (connections[i] >= 2) or not cleanData:
-            atomTypesAtomHolder[atomsIndexReference[atomType[i]]].append(atoms[i])
+            atomsHolder[atomType[i]].append(atoms[i])
     else:
         if (connections[i] > 0) or not cleanData:
-            atomTypesAtomHolder[atomsIndexReference[atomType[i]]].append(atoms[i])
+            atomsHolder[atomType[i]].append(atoms[i])
 
-count = 0
-for atomTypePoints in atomTypesAtomHolder:
-    
-    atomTypePoints = atomTypePoints[1:] # Remove the label point
+for atomTypeIndex in atomsHolder:
+    points = atomsHolder[atomTypeIndex]
 
-    maxAtoms, minAtoms, meanAtoms, stdAtoms, numChunks = FindOptimalChunks(
-    atomTypePoints, boxDimensions)
+    numChunks = FindOptimalChunks(points, boxDimensions)
     
-    if (boxDimensions / numChunks) > maxChunkSize:
+    if np.any(np.greater((boxDimensions / numChunks), maxChunkSize)):
         numChunks = maxChunkSizeChunkNum
     
-    atomTypesAtomHolder[count].insert(1, numChunks)
-    count += 1
+    atomsHolder[atomTypeIndex].append(numChunks)
     
-    
-    
-# Atom types holder now is [Atom descriptor, chunk size, p1, p2, ...]
+# atomsHolder now is [p1, p2, ..., pn, chunk size]
+print("Atom cleaning done, time taken         - {}\n".format(time.time() - atomClean))
+
+
+
+
+
+
+
 
 print("Assigning atoms a chunk ...")
 atomAssignStart = time.time()
 
 # Atom and Bond list for easy chunk based access
 
-for atomTypeCurr in atomTypesAtomHolder:
-    numChunks = atomTypeCurr[1]
-    atomName = atomTypeCurr[0]
-    currAtoms = atomTypeCurr[2:]
-    chunkSize = boxDimensions / numChunks
+for atomName in atomsHolder:
+    numChunks = atomsHolder[atomName][-1]
+    currAtoms = atomsHolder[atomName][:-1]
+    chunkSizes = boxDimensions / numChunks
 
     atomList = [[] for _ in range(numChunks**3)]
     atomIndex = 0
     for currAtom in currAtoms:
         try:
-            chunkIndex = ChunkCordsToIndex(CoordsToChunkCoords(currAtom, chunkSize), 
+            chunkIndex = ChunkCordsToIndex(CoordsToChunkCoords(currAtom, chunkSizes), 
                                                                numChunks)
             '''
             [x, y, z, type, ID, conn]
@@ -689,13 +671,14 @@ for atomTypeCurr in atomTypesAtomHolder:
             newAtom = np.array([float(currAtom[0]), 
                           float(currAtom[1]), 
                           float(currAtom[2]),
-                          atomType[atomIndex],
+                          atomName,#atomType[atomIndex],
                           atomIndex,
                           connections[atomIndex]])
             atomList[chunkIndex].append(newAtom)
             
             
             atomIndex += 1
+
         except IndexError:
             print("Error: Actual box size larger than declared size.")
             sys.exit()
@@ -704,7 +687,7 @@ for atomTypeCurr in atomTypesAtomHolder:
     try:
         f = open(fileName, "a")
         
-        f.write("{}-{}-{}{{\n".format(atomName, str(numChunks), str(chunkSize)))
+        f.write("{}-{}-{}-{}-{}{{\n".format(atomName, str(numChunks), str(chunkSizes[0]), str(chunkSizes[1]), str(chunkSizes[2])))
         
         for chunk in atomList:
             for currAtom in chunk:
@@ -728,7 +711,7 @@ print("Atom chunk assignment done, time taken - {}\n".format(time.time() - atomA
 
 
 print("Assigning bonds a chunk ...")
-
+bondAssignStart = time.time()
 
 bondMidpoints = []
 for currBond in bondDict.values():
@@ -736,30 +719,28 @@ for currBond in bondDict.values():
     for i in range(len(midpoint)):
         if (midpoint[i] < 0):
             midpoint[i] = 0
-        elif (midpoint[i] >= boxDimensions):
+        elif (midpoint[i] >= boxDimensions[i]):
             midpoint[i] = boxDimensions-0.00001
     bondMidpoints.append(midpoint)
 
-maxBonds, minBonds, meanBonds, stdBonds, numChunks = FindOptimalChunks(
-bondMidpoints, boxDimensions)
+numChunks = FindOptimalChunks(bondMidpoints, boxDimensions)
 
-if (boxDimensions / numChunks) > maxChunkSize:
+if np.any(np.greater((boxDimensions / numChunks), maxChunkSize)):
     numChunks = maxChunkSizeChunkNum
 
-chunkSize = boxDimensions / numChunks
+chunkSizes = boxDimensions / numChunks
 bondList = [[] for _ in range(numChunks**3)]
-bondAssignStart = time.time()
 
 for currBond in bondDict.values():
     bondMidpoint = currBond.GetMidpoint()
-    bondChunk = CoordsToChunkCoords(bondMidpoint, chunkSize)
+    bondChunk = CoordsToChunkCoords(bondMidpoint, chunkSizes)
     chunkIndex = ChunkCordsToIndex(bondChunk, numChunks)
     bondList[chunkIndex].append(currBond)
     
 try:
     f = open(fileName, "a")
     
-    f.write("Bonds-{}-{}{{\n".format(str(numChunks), str(chunkSize)))
+    f.write("Bonds-{}-{}-{}-{}{{\n".format(str(numChunks), str(chunkSizes[0]), str(chunkSizes[1]), str(chunkSizes[2])))
     
     for chunk in bondList:
         for currBond in chunk:
