@@ -122,6 +122,45 @@ def CleanAtomAndBondData(atoms, connections, atomType, bondDict):
             if newAtomIDs[ind]: tempList.append(ind)
         newAtomIDs = np.asarray(tempList)
         
+    # Delete any mismatch bonds
+    
+    # Calculate implied connections
+    calculatedConnections = np.full((len(atoms)), 0)
+    for currBond in bondDict.values():
+        atom1ID, atom2ID = currBond.GetIDInt()
+        calculatedConnections[atom1ID] += 1
+        calculatedConnections[atom2ID] += 1
+    
+    bondsToDelete = []
+    for i in newAtomIDs:
+        # If there is a discrepancy between the calculated and impled 
+        # connections, delete bond if both atoms it's connected to has a
+        # discrepancy, or if all connected atoms have the right amount,
+        # delete the longest bond. If there are less bonds then there are
+        # meant to be, then ....... uhhh. 
+        if (connections[i] != calculatedConnections[i]):
+            strI = str(i)
+            connectedBonds = [value for key, value in bondDict.items() if strI in key]
+            removeBond = None
+            
+            for currBond in connectedBonds:
+                atom1ID, atom2ID = currBond.GetIDInt()
+                if ((connections[atom1ID] != calculatedConnections[atom1ID]) and (connections[atom2ID] != calculatedConnections[atom2ID])): removeBond = currBond
+            
+            maxDist = 0
+            if removeBond is None:
+                for currBond in connectedBonds:  
+                    currDist = currBond.GetDistance()
+                    if (currDist > maxDist):
+                        maxDist = currDist
+                        removeBond = currBond
+            
+            bondDataToAdd = removeBond.GetID()
+            if bondDataToAdd not in bondsToDelete: bondsToDelete.append(bondDataToAdd)
+    
+    for bond in bondsToDelete:
+        del bondDict[bond]
+        
     return connections, newAtomIDs, bondDict
     
     
