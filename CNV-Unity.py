@@ -39,9 +39,13 @@ def ChunkCordsToIndex(chunkCoords, numChunks):
             chunkCoords[1]*numChunks + 
             chunkCoords[2]*(numChunks**2))
 
-def ParseBoxDimensions(splitData):
-    return np.array([float(splitData[0]), float(splitData[2]),
-                     float(splitData[1])])
+def ParseBoxDimensions(splitData, unityCoords = False):
+    retArray = np.array([float(splitData[0]), float(splitData[1]),
+                     float(splitData[2])])
+    if (unityCoords):
+        retArray = np.array([float(splitData[0]), float(splitData[2]),
+                         float(splitData[1])])
+    return retArray
 
 # Find equivelant chunk within original box
 def CentreChunkPoints(coords, chunkNum):
@@ -70,6 +74,55 @@ def ChunkifyPoints(chunkNum, boxDimensions, points):
         infoArray[xInd][yInd][zInd] += 1
         
     return infoArray.reshape(-1)
+
+
+
+
+
+
+
+def CleanAtomAndBondData(atoms, connections, atomType, bondDict):
+    
+    oldAtomIDs = np.array([])
+    newAtomIDs = np.asarray(range(len(atoms)))
+    
+    while not (np.array_equal(oldAtomIDs, newAtomIDs)):
+        
+        # Remove atoms with too few connections
+        oldAtomIDs = newAtomIDs
+        newAtomIDs = np.full((len(atoms)), False)
+        for i in oldAtomIDs:
+            if ("C_" in atomType[i]):
+                if (connections[i] >= 2):
+                    newAtomIDs[i] = True
+            else:
+                if (connections[i] >= 0):
+                    newAtomIDs[i] = True
+                    
+                    
+        # Remove bonds attached to non existent atoms
+        bondsToDelete = []
+        for currBond in bondDict.values():
+            atomDoesntExist = False
+            atom1ID, atom2ID = currBond.GetIDInt()
+            if not newAtomIDs[atom1ID]: atomDoesntExist = True
+            if not newAtomIDs[atom2ID]: atomDoesntExist = True
+            if (atomDoesntExist):
+                bondsToDelete.append([currBond.GetID(), atom1ID, atom2ID])
+
+                    
+        for bond in bondsToDelete:
+            del bondDict[bond[0]]
+            connections[bond[1]] -= 1
+            connections[bond[2]] -= 1
+            
+        
+        tempList = []
+        for ind in range(len(newAtomIDs)):
+            if newAtomIDs[ind]: tempList.append(ind)
+        newAtomIDs = np.asarray(tempList)
+        
+    return connections, newAtomIDs, bondDict
     
     
 
@@ -103,8 +156,8 @@ def RepeatInputFile(inputFile, maxChunkSize):
             '''
             try:
                 inputFileAtoms.append(np.array([float(splitData[1]), 
-                              float(splitData[3]), 
                               float(splitData[2]), 
+                              float(splitData[3]), 
                               int(float(splitData[4]))]))
                 inputFileAtomTypes.append(splitData[0].capitalize())
                 
@@ -271,6 +324,9 @@ class Bond:
         
         return retID
     
+    def GetIDInt(self):
+        return self.atom1ID, self.atom2ID
+    
     def GetCoords(self):
         return [self.atom1Coords, self.atom2Coords]
     
@@ -323,7 +379,7 @@ if (len(sys.argv)) > 2:
 # Formatting output file name
 cleanDataString = "N"
 if cleanData: cleanDataString = "Y"
-fileName = "{}_{}{}.cnv".format(inputFile[:-4], str(maxChunkSize).replace(".", "-"), cleanDataString)
+fileName = "{}-{}{}_NA.cnv".format(inputFile[:-4], str(maxChunkSize).replace(".", "-"), cleanDataString)
 
 '''
 
@@ -381,6 +437,8 @@ atoms = []
 atomType = []
 connections = []
 lineCount = 0
+
+
 
 '''
 [x, y, z]
@@ -462,7 +520,7 @@ for line in data:
         
     # Save bounding box size
     elif (len(splitData) == 3):
-        boxDimensions = ParseBoxDimensions(splitData)
+        boxDimensions = ParseBoxDimensions(splitData, unityCoords=True)
 
 # Zero all atoms
 minValues = np.amin(atoms, axis=0)
@@ -477,10 +535,8 @@ if (np.any(np.greater(maxs, boxDimensions))) or (np.any(np.less(mins, np.zeros(3
     print("Error: Actual box dimensions are larger than expected dimensions. \n       Please fix input file.\n\nExpected dimension - {}\n\nActual dimensions : \n  x - {}\n  y - {}\n  z - {}".format(boxDimensions, maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]))
     sys.exit()
 
-
 maxChunkSizeChunkNum = max((np.ceil((boxDimensions / maxChunkSize))).astype(int))
 print("File read done, time taken             - {}\n".format(time.time() - fileReadStart))
-
 
 
 
@@ -551,7 +607,7 @@ for atom in atoms:
     # Take the relevant indexes from the returned index list
     index = indexRet[atomNum][1:connections[atomNum]+1]
     
-    # Take the relevant distannces from the returned points list
+    # Take the relevant distances from the returned points list
     dists = distsRet[atomNum][1:connections[atomNum]+1]
     
     # Gather the atom locations
@@ -620,16 +676,29 @@ atomsHolder = {}
 for at in atomTypes:
     atomsHolder[at] = []    
 
-for i in range(len(atoms)):
+if (cleanData):
+    connections, validAtomIDs, bondDict = CleanAtomAndBondData(atoms, connections, atomType, bondDict)
+else:
+    validAtomIDs = range(len(atoms))
+
+for i in validAtomIDs:
     if ("C_" in atomType[i]):
+        # The connectons may have been updated so update them
+        currConnections = connections[i]
+        if (currConnections == 2): atomTypeStr = "C_sp"
+        elif (currConnections == 1): atomTypeStr = "C"
+        else:
+            atomTypeStr = "C_sp{}".format(currConnections - 1)
+        atomType[i] = atomTypeStr
+        
         if (connections[i] >= 2) or not cleanData:
-            atomsHolder[atomType[i]].append(atoms[i])
+            atomsHolder[atomType[i]].append(np.array([connections[i], atoms[i]], dtype=object))
     else:
-        if (connections[i] > 0) or not cleanData:
-            atomsHolder[atomType[i]].append(atoms[i])
+        if (connections[i] >= 0) or not cleanData:
+            atomsHolder[atomType[i]].append(np.array([connections[i], atoms[i]], dtype=object))
 
 for atomTypeIndex in atomsHolder:
-    points = atomsHolder[atomTypeIndex]
+    points = np.take(atomsHolder[atomTypeIndex], [i*2 + 1 for i in range(len(atomsHolder[atomTypeIndex]))])
 
     numChunks = FindOptimalChunks(points, boxDimensions)
     
@@ -655,8 +724,10 @@ atomAssignStart = time.time()
 
 for atomName in atomsHolder:
     numChunks = atomsHolder[atomName][-1]
-    currAtoms = atomsHolder[atomName][:-1]
+    currAtomsAndConnections = atomsHolder[atomName][:-1]
     chunkSizes = boxDimensions / numChunks
+    currConnections = np.take(currAtomsAndConnections, [i*2 for i in range(len(currAtomsAndConnections))])
+    currAtoms = np.take(currAtomsAndConnections, [i*2 + 1 for i in range(len(currAtomsAndConnections))])
 
     atomList = [[] for _ in range(numChunks**3)]
     atomIndex = 0
@@ -673,7 +744,7 @@ for atomName in atomsHolder:
                           float(currAtom[2]),
                           atomName,#atomType[atomIndex],
                           atomIndex,
-                          connections[atomIndex]])
+                          currConnections[atomIndex]])
             atomList[chunkIndex].append(newAtom)
             
             
@@ -691,8 +762,7 @@ for atomName in atomsHolder:
         
         for chunk in atomList:
             for currAtom in chunk:
-                if (int(currAtom[5]) > 1):
-                    f.write("{}|{}|{}|{}|{}~".format(currAtom[4],currAtom[0],currAtom[1],currAtom[2],currAtom[5]))
+                f.write("{}|{}|{}|{}|{}~".format(currAtom[4],currAtom[0],currAtom[1],currAtom[2],currAtom[5]))
             f.write("\n") # Empty chunks have a blank line. Helps Unity know when not to load anything
         
         f.write("}\n")
@@ -720,7 +790,10 @@ for currBond in bondDict.values():
         if (midpoint[i] < 0):
             midpoint[i] = 0
         elif (midpoint[i] >= boxDimensions[i]):
-            midpoint[i] = boxDimensions-0.00001
+            if (midpoint[i] - boxDimensions[i]) > 1:
+                print("Error, bond too far out of bounds:\n\tBound - {}\n\tBond Loc - {}".format(boxDimensions[i], midpoint[i]))
+                sys.exit()
+            midpoint[i] = boxDimensions[i]-0.00001
     bondMidpoints.append(midpoint)
 
 numChunks = FindOptimalChunks(bondMidpoints, boxDimensions)
