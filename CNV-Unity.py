@@ -145,7 +145,8 @@ def CleanAtomAndBondData(atoms, connections, atomType, bondDict):
             
             for currBond in connectedBonds:
                 atom1ID, atom2ID = currBond.GetIDInt()
-                if ((connections[atom1ID] != calculatedConnections[atom1ID]) and (connections[atom2ID] != calculatedConnections[atom2ID])): removeBond = currBond
+                if ((connections[atom1ID] != calculatedConnections[atom1ID]) and (connections[atom2ID] != calculatedConnections[atom2ID])): 
+                    removeBond = currBond
             
             maxDist = 0
             if removeBond is None:
@@ -402,7 +403,7 @@ debug = False
 # Process command arguments
 
 if ((len(sys.argv)) == 1) or (sys.argv[1][-4:] != ".xyz"):
-    print("Please provide an XYZ filename. \n\nUsage:\n\tpython3 inputToCarbonNanoverse.py Input-file-name optional-args\n\nargs:\n\t--C       - Clean data. If not specified set to false\n\t--MC x    - Set a chunk size of x. If not specified 10 is used")
+    print("Please provide an XYZ filename. \n\nUsage:\n\tpython3 CNV-Unity.py Input-file-name optional-args\n\nargs:\n\t--C       - Clean data. If not specified set to false\n\t--MC x    - Set a chunk size of x. If not specified 10 is used")
     sys.exit()
 if (len(sys.argv)) > 1:
     inputFile = sys.argv[1]
